@@ -1,5 +1,4 @@
 # Energy-Management-in-the-Clouds
 
-Saahir Narang
-\newline
+Saahir Narang  
 Harshadeep Kambhampati
