@@ -267,8 +267,8 @@ void Scheduler::NewTask(Time_t now, TaskId_t task_id) {
         case POWER:
             list = powerMachines; 
             taskList = &powerTasks; 
-            quarter = armActiveQuarter; 
-            quarterSize = armQuarterSize; 
+            quarter = powerActiveQuarter; 
+            quarterSize = powerQuarterSize; 
             break;
         default:
             list = riscvMachines; 
