@@ -141,7 +141,6 @@ void Scheduler::PeriodicCheck(Time_t now) {
             return;
         }
         currentPerf = P0;
-        cout << "Current Perf Changed to P0" << endl; 
         for (MachineId_t machine : allMachines) {
             for(int j = 0; j < Machine_GetInfo(machine).num_cpus; j++) {
                 Machine_SetCorePerformance(machine, j, currentPerf); 
@@ -153,7 +152,6 @@ void Scheduler::PeriodicCheck(Time_t now) {
             return;
         }
         currentPerf = P1;
-        cout << "Current Perf Changed to P1" << endl;
         for (MachineId_t machine : allMachines) {
             for(int j = 0; j < Machine_GetInfo(machine).num_cpus; j++) {
                 Machine_SetCorePerformance(machine, j, currentPerf); 
@@ -165,7 +163,6 @@ void Scheduler::PeriodicCheck(Time_t now) {
             return;
         }
         currentPerf = P2;
-        cout << "Current Perf Changed to P2" << endl;
         for (MachineId_t machine : allMachines) {
             for(int j = 0; j < Machine_GetInfo(machine).num_cpus; j++) {
                 Machine_SetCorePerformance(machine, j, currentPerf); 
@@ -177,7 +174,6 @@ void Scheduler::PeriodicCheck(Time_t now) {
             return;
         }
         currentPerf = P3;
-        cout << "Current Perf Changed to P3" << endl;
         for (MachineId_t machine : allMachines) {
             for(int j = 0; j < Machine_GetInfo(machine).num_cpus; j++) {
                 Machine_SetCorePerformance(machine, j, currentPerf); 
@@ -203,7 +199,6 @@ void Scheduler::TaskComplete(Time_t now, TaskId_t task_id) {
     // Decide if a machine is to be turned off, slowed down, or VMs to be migrated according to your policy
     // This is an opportunity to make any adjustments to optimize performance/energy
     SimOutput("Scheduler::TaskComplete(): Task " + to_string(task_id) + " is complete at " + to_string(now), 4);
-    // cout << "TASK COMPLETED" << endl;
     mipsCost[taskMap[task_id]] -= 1000;
     memoryCost[taskMap[task_id]] -= GetTaskInfo(task_id).required_memory;
 }
@@ -309,22 +304,15 @@ bool hasEnoughResource(MachineId_t mid, TaskId_t tid) {
 }
 
 double getCurrentLoad(vector<MachineId_t> machines) {
-    signed totalMips = 0;
-    signed usedMips = 0;
     signed totalMemory = 0;
     signed usedMemory = 0;
     for (unsigned i = 0; i < machines.size(); i++) {
         MachineInfo_t info = Machine_GetInfo(machines.at(i));
-        //totalMips += info.performance[currentPerf] * info.num_cpus;
         totalMemory += info.memory_size;
-        //usedMips += mipsCost[machines.at(i)];
         usedMemory += memoryCost[machines.at(i)];
     } 
-    // std::cout << "Total mips cost " << usedMips << std::endl;
-    // std::cout << "Total mips " << totalMips << std::endl;
-    //double mipsLoad = (usedMips * 1.0) / totalMips;
     double memoryLoad = (usedMemory * 1.0) / totalMemory;
 
-    //Return largest overall load, whether it's mips or memory load
+    //Return overall load
     return memoryLoad;
 }
