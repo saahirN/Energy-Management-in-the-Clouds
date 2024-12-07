@@ -24,17 +24,26 @@ vector<MachineId_t> armMachines;
 vector<MachineId_t> powerMachines;
 vector<MachineId_t> riscvMachines;
 
+unsigned activex86 = 0; 
+unsigned activeArm = 0;
+unsigned activePower = 0;
+unsigned activeRiscv = 0; 
+
 std::unordered_map<MachineId_t, vector<VMId_t>> vmMap;
 std::unordered_map<TaskId_t, MachineId_t> taskMap;
 std::unordered_map<TaskId_t, VMId_t> taskToVM; 
 std::unordered_map<MachineId_t, unsigned> remainingMips; 
 std::unordered_map<VMId_t, bool> isMigrating; 
+std::unordered_map<MachineId_t, unsigned> numTasks; 
 std::unordered_map<MachineId_t, unsigned> remainingMemory; 
+
+vector<MachineId_t> turningOff; 
 
 
 unsigned insert_sorted_ee(vector<MachineId_t>* mList, MachineId_t id);
 bool hasEnoughResource(MachineId_t mid, TaskId_t tid); 
 unsigned estimatedPower(MachineId_t mid, TaskId_t tid); 
+void updateMachines(CPUType_t type);
 
 void Scheduler::Init() {
     // Find the parameters of the clusters
@@ -73,6 +82,7 @@ void Scheduler::Init() {
         }
         remainingMips[MachineId_t(i)] = Machine_GetInfo(MachineId_t(i)).performance[0] * Machine_GetInfo(MachineId_t(i)).num_cpus; 
         remainingMemory[MachineId_t(i)] = (Machine_GetInfo(MachineId_t(i)).memory_size) * 0.95; 
+        numTasks[MachineId_t(i)] = 0; 
     }
 
     /* Turn on 1/4 of the machines of each type */
@@ -175,7 +185,9 @@ void Scheduler::NewTask(Time_t now, TaskId_t task_id) {
     MachineId_t chosen = -1; 
     unsigned size = list.size(); 
     for(int i = 0; i < size; i++) {
-        if(hasEnoughResource(list.at(i), task_id)) {
+        if(hasEnoughResource(list.at(i), task_id) 
+            && std::find(turningOff.begin(), turningOff.end(), list.at(i)) == turningOff.end()
+            && Machine_GetInfo(list.at(i)).s_state == S0) {
             unsigned estPower = estimatedPower(list.at(i), task_id); 
             if(estPower < minPower) {
                 minPower = estPower; 
@@ -186,11 +198,16 @@ void Scheduler::NewTask(Time_t now, TaskId_t task_id) {
 
     SimOutput("Chosen machine: " + to_string(chosen), 1);
 
-    if (chosen == -1) {
+    while (chosen == -1) {
         int random = std::rand();
         int min = 0, max = list.size() - 1;
         int random_number = min + (random % (max - min + 1));
         chosen = list.at(random_number); 
+
+        if(Machine_GetInfo(chosen).s_state != S0 
+            || std::find(turningOff.begin(), turningOff.end(), chosen) != turningOff.end()) {
+            chosen = -1; 
+        }
     }
 
     /* Put the task on the machine */
@@ -214,7 +231,26 @@ void Scheduler::NewTask(Time_t now, TaskId_t task_id) {
     } else {
         remainingMemory[chosen] = 0; 
     }
-    
+    if(numTasks[chosen] == 0) {
+        switch (info.required_cpu) {
+            case X86:
+                activex86++; 
+                break; 
+            case ARM:
+                activeArm++;
+                break; 
+            case POWER:
+                activePower++; 
+                break; 
+            case RISCV:
+                activeRiscv++; 
+                break; 
+            default:
+                break; 
+        }
+        updateMachines(info.required_cpu); 
+    }
+    numTasks[chosen]++; 
 
     /* Adjust P-State as needed */
     unsigned mipsNeeded = Machine_GetInfo(chosen).performance[0] - remainingMips[chosen]; 
@@ -273,23 +309,44 @@ void Scheduler::TaskComplete(Time_t now, TaskId_t task_id) {
     // Decide if a machine is to be turned off, slowed down, or VMs to be migrated according to your policy
     // This is an opportunity to make any adjustments to optimize performance/energy
 
-    // SimOutput("Finishing Task " + to_string(task_id), 1); 
-    // cout << "Finishing Task " + to_string(task_id) << endl; 
+    SimOutput("Finishing Task " + to_string(task_id), 1); 
     TaskInfo_t info = GetTaskInfo (task_id); 
     CPUType_t cpu = info.required_cpu; 
     VMType_t os = info.required_vm; 
 
     MachineId_t mid = taskMap[task_id];
-    vector<VMId_t> *vms = &vmMap[mid];
+    vector<VMId_t> *machine_vms = &vmMap[mid];
     VMId_t toRemove = taskToVM[task_id]; 
 
     remainingMemory[mid] += info.required_memory; 
     remainingMips[mid] += 1000; 
+    numTasks[mid]--; 
 
-    VM_Shutdown(toRemove); 
-    (*vms).erase(std::remove((*vms).begin(), (*vms).end(), toRemove), (*vms).end());
+    if(numTasks[mid] == 0) {
+        switch (info.required_cpu) {
+            case X86:
+                activex86--; 
+                break; 
+            case ARM:
+                activeArm--;
+                break; 
+            case POWER:
+                activePower--; 
+                break; 
+            case RISCV:
+                activeRiscv--; 
+                break; 
+            default:
+                break; 
+        }
+        updateMachines(info.required_cpu); 
+    }
 
-
+    if(!isMigrating[toRemove]) {
+        VM_Shutdown(toRemove); 
+        (*machine_vms).erase(std::remove((*machine_vms).begin(), (*machine_vms).end(), toRemove), (*machine_vms).end()); 
+    }
+    
 
     SimOutput("Scheduler::TaskComplete(): Task " + to_string(task_id) + " is complete at " + to_string(now), 4);
 }
@@ -319,16 +376,16 @@ void MemoryWarning(Time_t time, MachineId_t machine_id) {
 
     /* Get a list of all tasks */
     vector<TaskId_t> tasks; 
-    vector<VMId_t> vms = vmMap[machine_id]; 
-    for(int i = 0; i < vms.size(); i++) {
-        VMInfo_t vinfo = VM_GetInfo(vms.at(i)); 
+    vector<VMId_t> machine_vms = vmMap[machine_id]; 
+    for(int i = 0; i < machine_vms.size(); i++) {
+        VMInfo_t vinfo = VM_GetInfo(machine_vms.at(i)); 
         for(int j = 0; j < vinfo.active_tasks.size(); j++) {
             tasks.push_back(vinfo.active_tasks.at(j)); 
         }
     }
 
     /* Sort the list of tasks by their memory usage*/
-    std::sort(vms.begin(), vms.end(), [](VMId_t a, VMId_t b) {
+    std::sort(machine_vms.begin(), machine_vms.end(), [](VMId_t a, VMId_t b) {
         if(VM_GetInfo(a).active_tasks.size() == 0 || VM_GetInfo(b).active_tasks.size() == 0) {
             return false; 
         } 
@@ -355,18 +412,58 @@ void MemoryWarning(Time_t time, MachineId_t machine_id) {
     }    
 
     unsigned listSize = list.size(); 
-    for(int i = 0; i < vms.size(); i++) {
+    for(int i = 0; i < machine_vms.size(); i++) {
         for(int j = 0; j < listSize; j++) {
             if( list.at(j) != machine_id 
-                && !isMigrating[vms.at(i)] && VM_GetInfo(vms.at(i)).active_tasks.size() != 0
-                && hasEnoughResource(list.at(j), VM_GetInfo(vms.at(i)).active_tasks.at(0))) {
-                cout << "Migrating vm " << to_string(vms.at(i)) << " to machine " << to_string(list.at(j)) << endl;
+                && Machine_GetInfo(list.at(j)).s_state == S0
+                && std::find(turningOff.begin(), turningOff.end(), list.at(j)) == turningOff.end()
+                && !isMigrating[machine_vms.at(i)] && VM_GetInfo(machine_vms.at(i)).active_tasks.size() != 0
+                && hasEnoughResource(list.at(j), VM_GetInfo(machine_vms.at(i)).active_tasks.at(0))) {
                 remainingMips[machine_id] += 1000;
                 remainingMips[list.at(j)] -= 1000;
-                remainingMemory[machine_id] += GetTaskMemory(VM_GetInfo(vms.at(i)).active_tasks.at(0)); 
-                remainingMemory[list.at(j)] -= GetTaskMemory(VM_GetInfo(vms.at(i)).active_tasks.at(0)); 
-                VM_Migrate(vms.at(i), list.at(j)); 
-                isMigrating[vms.at(i)] = true; 
+                remainingMemory[machine_id] += GetTaskMemory(VM_GetInfo(machine_vms.at(i)).active_tasks.at(0)); 
+                remainingMemory[list.at(j)] -= GetTaskMemory(VM_GetInfo(machine_vms.at(i)).active_tasks.at(0)); 
+                numTasks[machine_id]--; 
+                if(numTasks[machine_id] == 0) {
+                    switch(cpu) {
+                        case X86:
+                            activex86--; 
+                            break;
+                        case ARM:
+                            activeArm--;
+                            break;
+                        case POWER:
+                            activePower--;
+                            break; 
+                        case RISCV:
+                            activeRiscv--;
+                            break;
+                        default:
+                            break; 
+                    }
+                }
+                if(numTasks[list.at(j)] == 0) {
+                    switch(cpu) {
+                        case X86:
+                            activex86++; 
+                            break;
+                        case ARM:
+                            activeArm++;
+                            break;
+                        case POWER:
+                            activePower++;
+                            break; 
+                        case RISCV:
+                            activeRiscv++;
+                            break;
+                        default:
+                            break; 
+                    }
+                }
+                numTasks[list.at(j)]++;
+                updateMachines(cpu); 
+                isMigrating[machine_vms.at(i)] = true; 
+                VM_Migrate(machine_vms.at(i), list.at(j)); 
                 j = list.size(); 
             }
         }
@@ -375,8 +472,8 @@ void MemoryWarning(Time_t time, MachineId_t machine_id) {
 
 void MigrationDone(Time_t time, VMId_t vm_id) {
     // The function is called on to alert you that migration is complete
-    cout << "Migration Done!" << endl; 
     SimOutput("MigrationDone(): Migration of VM " + to_string(vm_id) + " was completed at time " + to_string(time), 0);
+    isMigrating[vm_id] = false; 
     Scheduler.MigrationComplete(time, vm_id);
     migrating = false;
 }
@@ -407,12 +504,114 @@ void SimulationComplete(Time_t time) {
 }
 
 void SLAWarning(Time_t time, TaskId_t task_id) {
+    /* Get a list of all tasks */
+    MachineId_t machine_id = taskMap[task_id]; 
+    vector<TaskId_t> tasks; 
+    vector<VMId_t> machine_vms = vmMap[machine_id]; 
+    for(int i = 0; i < machine_vms.size(); i++) {
+        VMInfo_t vinfo = VM_GetInfo(machine_vms.at(i)); 
+        for(int j = 0; j < vinfo.active_tasks.size(); j++) {
+            tasks.push_back(vinfo.active_tasks.at(j)); 
+        }
+    }
 
+    /* Sort the list of tasks by their memory usage*/
+    std::sort(machine_vms.begin(), machine_vms.end(), [](VMId_t a, VMId_t b) {
+        if(VM_GetInfo(a).active_tasks.size() == 0 || VM_GetInfo(b).active_tasks.size() == 0) {
+            return false; 
+        } 
+        return GetTaskMemory(VM_GetInfo(a).active_tasks.at(0)) > GetTaskMemory(VM_GetInfo(b).active_tasks.at(0)); // Sort in descending order
+    });
+    
+
+    /* Get the list of machines that can be migrated to */
+    vector<MachineId_t> list;
+    CPUType_t cpu = Machine_GetInfo(machine_id).cpu; 
+    switch (cpu) {
+        case X86:
+            list = x86Machines; 
+            break; 
+        case ARM:
+            list = armMachines;
+            break;
+        case POWER:
+            list = powerMachines;
+            break;
+        default:
+            list = riscvMachines; 
+            break;
+    }    
+
+    unsigned listSize = list.size(); 
+    for(int i = 0; i < machine_vms.size(); i++) {
+        for(int j = 0; j < listSize; j++) {
+            if( list.at(j) != machine_id 
+                && Machine_GetInfo(list.at(j)).s_state == S0
+                && std::find(turningOff.begin(), turningOff.end(), list.at(j)) == turningOff.end()
+                && !isMigrating[machine_vms.at(i)] && VM_GetInfo(machine_vms.at(i)).active_tasks.size() != 0
+                && hasEnoughResource(list.at(j), VM_GetInfo(machine_vms.at(i)).active_tasks.at(0))) {
+                remainingMips[machine_id] += 1000;
+                remainingMips[list.at(j)] -= 1000;
+                remainingMemory[machine_id] += GetTaskMemory(VM_GetInfo(machine_vms.at(i)).active_tasks.at(0)); 
+                remainingMemory[list.at(j)] -= GetTaskMemory(VM_GetInfo(machine_vms.at(i)).active_tasks.at(0)); 
+                numTasks[machine_id]--; 
+                if(numTasks[machine_id] == 0) {
+                    switch(cpu) {
+                        case X86:
+                            activex86--; 
+                            break;
+                        case ARM:
+                            activeArm--;
+                            break;
+                        case POWER:
+                            activePower--;
+                            break; 
+                        case RISCV:
+                            activeRiscv--;
+                            break;
+                        default:
+                            break; 
+                    }
+                }
+                if(numTasks[list.at(j)] == 0) {
+                    switch(cpu) {
+                        case X86:
+                            activex86++; 
+                            break;
+                        case ARM:
+                            activeArm++;
+                            break;
+                        case POWER:
+                            activePower++;
+                            break; 
+                        case RISCV:
+                            activeRiscv++;
+                            break;
+                        default:
+                            break; 
+                    }
+                }
+                numTasks[list.at(j)]++;
+                updateMachines(cpu); 
+                VM_Migrate(machine_vms.at(i), list.at(j)); 
+                isMigrating[machine_vms.at(i)] = true; 
+                j = list.size(); 
+            }
+        }
+    }
 }
 
 void StateChangeComplete(Time_t time, MachineId_t machine_id) {
     // Called in response to an earlier request to change the state of a machine
-    // SimOutput("Machine " + to_string(machine_id) + " has changed to state " + to_string(Machine_GetInfo(machine_id).s_state), 0); 
+    SimOutput("Machine " + to_string(machine_id) + " has changed to state " + to_string(Machine_GetInfo(machine_id).s_state), 4); 
+    if(Machine_GetInfo(machine_id).s_state != S0) {
+        for(int i = 0; i < turningOff.size(); i++) {
+            if(turningOff.at(i) == machine_id) {
+                turningOff.erase(turningOff.begin() + i); 
+                i = turningOff.size(); 
+            }
+        } 
+    }
 }
 
 unsigned insert_sorted_ee(vector<MachineId_t>* mList, MachineId_t id) {
@@ -481,4 +680,58 @@ unsigned estimatedPower(MachineId_t mid, TaskId_t tid) {
     }
 
     return energy; 
+}
+
+/* Turn machines on/off to save energy */
+void updateMachines(CPUType_t type) {
+    double tresholdS0 = 0.46;
+    vector<MachineId_t> list;
+    unsigned active = 0; 
+    switch(type) {
+        case X86:
+            list = x86Machines; 
+            active = activex86; 
+            break;
+        case ARM:
+            list = armMachines; 
+            active = activeArm; 
+            break;
+        case POWER:
+            list = powerMachines; 
+            active = activePower; 
+            break; 
+        case RISCV:
+            list = riscvMachines;
+            active = activeRiscv; 
+            break; 
+        default:
+            break; 
+    } 
+
+    unsigned size = list.size();
+    unsigned totalInactive = list.size() - active; 
+    unsigned inactiveNum = 0; 
+    for(int i = 0; i < size; i++) {
+        MachineId_t mid = list.at(i);
+        MachineInfo_t minfo = Machine_GetInfo(mid); 
+        if(size - active <= 4) {
+            if(minfo.s_state != S0) {
+                Machine_SetState(mid, S0);
+            }
+        } else {
+            if(numTasks[mid] == 0) {
+                if(inactiveNum < totalInactive * tresholdS0) {
+                    if(minfo.s_state != S0) {
+                        Machine_SetState(mid, S0);
+                    }
+                } else {
+                    if(minfo.s_state != S1) {
+                        Machine_SetState(mid, S1); 
+                        turningOff.push_back(mid); 
+                    }
+                }
+                inactiveNum++; 
+            }
+        }
+    }
 }
