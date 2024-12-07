@@ -11,3 +11,5 @@ Algorithm 4: Modified Best Fit Decreasing
 
 Each of the algorithms have a corresponding folder containing their Scheduler.cpp file   
 For each of them, we only changed the Scheduler.cpp file  
+
+The BEST file contains the best run
