@@ -4,7 +4,7 @@ Saahir Narang
 Harshadeep Kambhampati
 
 We have created four algorithms  
-Algorithm 1:  
+Algorithm 1:  Modified PMapper
 Algorithm 2:  
 Algorithm 3: Bucketed Round Robin   
 Algorithm 4: Modified Best Fit Decreasing   
