@@ -5,7 +5,7 @@ Harshadeep Kambhampati
 
 We have created four algorithms  
 Algorithm 1:  Modified PMapper  
-Algorithm 2:  PState Cohort
+Algorithm 2:  PState Cohort  
 Algorithm 3: Bucketed Round Robin   
 Algorithm 4: Modified Best Fit Decreasing   
 
