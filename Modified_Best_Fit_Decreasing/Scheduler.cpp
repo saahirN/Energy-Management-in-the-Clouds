@@ -472,11 +472,11 @@ void MemoryWarning(Time_t time, MachineId_t machine_id) {
 
 void MigrationDone(Time_t time, VMId_t vm_id) {
     // The function is called on to alert you that migration is complete
-    SimOutput("MigrationDone(): Migration of VM " + to_string(vm_id) + " was completed at time " + to_string(time), 0);
+    SimOutput("MigrationDone(): Migration of VM " + to_string(vm_id) + " was completed at time " + to_string(time), 4);
     isMigrating[vm_id] = false; 
     Scheduler.MigrationComplete(time, vm_id);
-    migrating = false;
-}
+    migrating = false;   
+} 
 
 void SchedulerCheck(Time_t time) {
     // This function is called periodically by the simulator, no specific event
@@ -684,8 +684,8 @@ unsigned estimatedPower(MachineId_t mid, TaskId_t tid) {
 
 /* Turn machines on/off to save energy */
 void updateMachines(CPUType_t type) {
-    double tresholdS0 = 0.46;
-    vector<MachineId_t> list;
+    double tresholdS0 = 0.75;
+    vector<MachineId_t> list;  
     unsigned active = 0; 
     switch(type) {
         case X86:
@@ -711,13 +711,13 @@ void updateMachines(CPUType_t type) {
     unsigned size = list.size();
     unsigned totalInactive = list.size() - active; 
     unsigned inactiveNum = 0; 
-    for(int i = 0; i < size; i++) {
+    for(int i = 0; i < size; i++) { 
         MachineId_t mid = list.at(i);
         MachineInfo_t minfo = Machine_GetInfo(mid); 
-        if(size - active <= 4) {
+        if(totalInactive <= 8) {
             if(minfo.s_state != S0) {
-                Machine_SetState(mid, S0);
-            }
+                Machine_SetState(mid, S0); 
+            } 
         } else {
             if(numTasks[mid] == 0) {
                 if(inactiveNum < totalInactive * tresholdS0) {
@@ -730,8 +730,8 @@ void updateMachines(CPUType_t type) {
                         turningOff.push_back(mid); 
                     }
                 }
-                inactiveNum++; 
+                inactiveNum++;     
             }
-        }
+        }  
     }
 }
